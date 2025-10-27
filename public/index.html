@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Combine PDFs</title>
+    <style>
+      body { font-family: Arial, Helvetica, sans-serif; max-width: 900px; margin: 2rem auto; }
+      form { margin-bottom: 1rem; }
+      .preview { margin-top: 1rem; border: 1px solid #ddd; padding: 8px; }
+      iframe { width: 100%; height: 80vh; border: none; }
+      table.missing { width: 100%; border-collapse: collapse; margin-top: 8px; }
+      table.missing th, table.missing td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+      table.missing th { background: #f7f7f7; }
+      .status-success { color: green; font-weight: 600; }
+      .status-missing { color: crimson; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>Combine Invoices PDFs</h1>
+    <p>Upload the Bank Invoice and any additional Invoice PDFs to combine them into a single document according to the tables in the Bank Invoice.</p>
+    <p>This tool will help you streamline your invoicing process by merging all relevant documents into one PDF file.</p>
+    <p>Analyze Main lets you inspect the content of the Bank Invoice.</p>
+
+    <form id="uploadForm">
+      <div>
+        <label for="mainPdf"><strong>Main PDF (required) - Bank Invoice</strong></label><br />
+        <input id="mainPdf" name="main" type="file" accept="application/pdf" />
+      </div>
+      <div style="margin-top:0.5rem;">
+        <label for="pdfs"><strong>Additional Invoice PDFs (files or entire folder)</strong></label><br />
+        <!-- allow multiple files and folder selection (webkitdirectory for Chromium browsers) -->
+        <input id="pdfs" name="pdfs" type="file" accept="application/pdf" multiple />
+      </div>
+      <div style="margin-top:0.75rem;">
+        <button type="submit">Combine</button>
+        <button type="button" id="analyzeBtn">Analyze Main</button>
+      </div>
+    </form>
+
+    <div id="status"></div>
+    <div id="analysis" style="margin-top:1rem; display:none; border:1px solid #eee; padding:8px;">
+      <h3>Analysis</h3>
+      <div id="analysisJson" style="font-family:monospace; white-space:pre-wrap; max-height:400px; overflow:auto;"></div>
+    </div>
+    <div id="preview" class="preview" style="display:none">
+      <h3>Combined PDF</h3>
+      <iframe id="pdfFrame"></iframe>
+    </div>
+
+    <div id="missingReport" style="margin-top:12px; display:none;"></div>
+
+    <script>
+      const form = document.getElementById('uploadForm');
+      const pdfsInput = document.getElementById('pdfs');
+      const status = document.getElementById('status');
+      const preview = document.getElementById('preview');
+      const pdfFrame = document.getElementById('pdfFrame');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const mainFile = document.getElementById('mainPdf').files[0];
+        const files = Array.from(pdfsInput.files || []);
+        if (!mainFile) {
+          status.textContent = 'Please choose the main PDF file.';
+          return;
+        }
+
+        status.textContent = 'Uploading and combining...';
+        const formData = new FormData();
+        formData.append('main', mainFile);
+        // preserve relative path when folder selection is used (webkitRelativePath)
+        for (const f of files) {
+          const uploadName = (f.webkitRelativePath && f.webkitRelativePath.length) ? f.webkitRelativePath : f.name;
+          formData.append('pdfs', f, uploadName);
+        }
+
+        try {
+          const resp = await fetch('/combine', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!resp.ok) {
+            const err = await resp.json();
+            status.textContent = 'Error: ' + (err.error || resp.statusText);
+            return;
+          }
+
+          const json = await resp.json();
+          // build blob from base64
+          const b64 = json.pdf;
+          const binary = atob(b64);
+          const len = binary.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+          pdfFrame.src = url;
+          preview.style.display = 'block';
+          // render missing placeholders report as table
+          const reportEl = document.getElementById('missingReport');
+          function escapeHtml(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[c]); }
+          if (json.missingPlaceholders && json.missingPlaceholders.length > 0) {
+            status.innerHTML = '<span class="status-missing">Missing PDFs detected</span>';
+            const rows = json.missingPlaceholders.map((mp, idx) => {
+              const pages = escapeHtml((mp.pages || []).join(', '));
+              const exp = mp.expected || {};
+              const owner = escapeHtml(exp.owner || '');
+              const orig = escapeHtml(exp.originalPage || '');
+              const amount = escapeHtml(exp.entry?.amountStr || '');
+              const snippet = escapeHtml((exp.entry && (exp.entry.rechnungstext || exp.entry.raw)) ? (exp.entry.rechnungstext || exp.entry.raw).slice(0,120) : '');
+              return `<tr><td>${idx+1}</td><td>${pages}</td><td>${owner}</td><td>${amount}</td><td>${snippet}</td></tr>`;
+            }).join('');
+            reportEl.innerHTML = `<table class="missing"><thead><tr><th>#</th><th>Pages</th><th>Owner</th><th>Amount</th><th>Snippet</th></tr></thead><tbody>${rows}</tbody></table>`;
+            reportEl.style.display = 'block';
+          } else {
+            status.innerHTML = '<span class="status-success">Everything successfully combined</span>';
+            reportEl.style.display = 'none';
+          }
+        } catch (err) {
+          status.textContent = 'Error: ' + err.message;
+        }
+      });
+
+      document.getElementById('analyzeBtn').addEventListener('click', async () => {
+        const mainFile = document.getElementById('mainPdf').files[0];
+        if (!mainFile) { status.textContent = 'Please choose the main PDF file.'; return; }
+        status.textContent = 'Analyzing main PDF...';
+        const fd = new FormData(); fd.append('main', mainFile);
+        try {
+          const resp = await fetch('/analyze', { method: 'POST', body: fd });
+          if (!resp.ok) { const err = await resp.json(); status.textContent = 'Error: ' + (err.error || resp.statusText); return; }
+          const json = await resp.json();
+          document.getElementById('analysisJson').textContent = JSON.stringify(json, null, 2);
+          document.getElementById('analysis').style.display = 'block';
+          status.textContent = 'Analysis ready.';
+        } catch (err) { status.textContent = 'Error: ' + err.message; }
+      });
+    </script>
+  </body>
+</html>
