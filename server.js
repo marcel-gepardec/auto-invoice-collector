@@ -203,7 +203,11 @@ app.post('/analyze', upload.single('main'), async (req, res) => {
       let entries = (p.lines || []).map(l => parseLineToEntry(l));
       entries = entries.filter(e => {
         const hay = (e.rechnungstext || e.raw || '');
-        return !skipRegex.test(hay);
+        // skip summary lines and entries explicitly labeled as MANIPULATIONSENTGELT
+        if (skipRegex.test(hay)) return false;
+        const rt = (e.rechnungstext || '').toString().trim().toLowerCase();
+        if (rt === 'manipulationsentgelt') return false;
+        return true;
       });
       return { page: p.page, name: p.name, entries };
     });
@@ -333,7 +337,10 @@ app.post('/combine', upload.any(), async (req, res) => {
         let entries = (p.lines || []).map(l => parseLineToEntry(l));
         entries = entries.filter(e => {
           const hay = (e.rechnungstext || e.raw || '');
-          return !skipRegex.test(hay);
+          if (skipRegex.test(hay)) return false;
+          const rt = (e.rechnungstext || '').toString().trim().toLowerCase();
+          if (rt === 'manipulationsentgelt') return false;
+          return true;
         });
         return { page: p.page, name: p.name, entries };
       });
