@@ -5,7 +5,6 @@ This folder contains a self-contained web app to combine PDFs.
 Usage:
 
 ```powershell
-cd web
 npm install
 npm start
 ```
